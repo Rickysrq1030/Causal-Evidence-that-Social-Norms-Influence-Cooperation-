@@ -1,4 +1,4 @@
-# Causal Evidence that Social Norms Influence Cooperation
+# Majority-Based Social Rewards Transform Social Dilemmas into Coordination Problems
 ## Simulation Code
 
 All numerical simulations were performed in MATLAB (R2026a). The source code is organized into modular scripts corresponding to the figures presented in the main text and supplementary material.
