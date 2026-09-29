@@ -1,4 +1,4 @@
-# Majority-Based Social Rewards Transform Social Dilemmas into Coordination Problems
+# Causal Evidence that Social Norms Influence Cooperation
 ## Simulation Code
 
 All numerical simulations were performed in MATLAB (R2026a). The source code is organized into modular scripts corresponding to the figures presented in the main text and supplementary material.
@@ -161,3 +161,123 @@ Install and start Redis
 sudo apt-get install redis-server -y
 sudo systemctl start redis-server
 ```
+
+## Human-machine game
+
+This section documents the human-machine version of the code: the same PGG framework, but participants play in groups containing bots, under one of two disclosure conditions.
+
+### Code layout
+
+```
+truthful/    # bots disclosed
+deception/   # bots concealed
+```
+
+Each directory holds four independent oTree projects. `_main` / `_2` / `_3` / `_4` denote the **stage order**, not four different norm conditions:
+
+```
+truthful/otree_pgg_bot_norm-main/otree_pgg_bot_norm-main/settings.py
+truthful/otree_pgg_bot_norm-main_2/otree_pgg_bot_norm-main/settings.py
+...
+```
+
+All 8 `settings.py` are byte-identical (same md5); only each app's `models.py` differs, because the stage order differs. Always `cd` into one project root (the folder containing `settings.py` and `manage.py`) before running. Do not run two projects with the same app names from one working directory.
+
+### Stage conditions
+
+| Stage | `with_norm` | `a_or_not` | `allc_or_not` | Bot strategy |
+| :-- | :-- | :-- | :-- | :-- |
+| A | True | True | True | invest every round |
+| B | True | True | False | keep every round |
+| C | False | False | True | invest every round |
+| D | False | False | False | keep every round |
+
+- `with_norm` / `a_or_not`: the 1.5-point norm bonus. In this code base they always hold the same value; `a_or_not` drives the wording shown on the screens, `with_norm` drives the actual payoff computation.
+- `allc_or_not`: bot strategy — True = all-invest, False = all-keep.
+
+Stage order per project:
+
+| Project | Order |
+| :-- | :-- |
+| `otree_pgg_bot_norm-main` | A → B → C → D |
+| `otree_pgg_bot_norm-main_2` | B → C → D → A |
+| `otree_pgg_bot_norm-main_3` | C → D → A → B |
+| `otree_pgg_bot_norm-main_4` | D → A → B → C |
+
+Conditions are set through the `default=` values of the `Subsession` fields in each app's `models.py` (commented-out assignments in `creating_session()` are available for temporary overrides). Stage 1 is always `pgg_no_survey` (full instructions: `IntroductionA`, `IntroductionRule`, rule quiz `CheckQues`); stages 2–4 are `pgg_no_two` / `pgg_no_three` / `pgg_no_four` with page sequence `[IntroductionB, ContributeNew, ResultsWaitPage, ResultsNew, FinalResults]`.
+
+### Key session parameters (settings.py)
+
+```python
+players_per_group = 8          # human participants
+num_demo_participants = 8
+init_money = 50
+multiplier = 2                 # public pool multiplier
+total_round = 10               # rounds actually played per stage (app num_rounds = 20)
+timeout_seconds = 40
+with_bot = True
+bot_proportion = 0.2           # bot share
+norm_c = 1.5                   # norm bonus value
+truth_or_not = True            # whether the bots are disclosed
+app_sequence = ['pgg_no_survey', 'info_collector_one', 'pgg_no_two',
+                'info_collector_two', 'pgg_no_three', 'info_collector_three',
+                'pgg_no_four', 'info_collector']
+```
+
+The number of bots is derived from the proportion, not given directly:
+
+```python
+num_bots = int(num_players * bot_proportion / (1 - bot_proportion))
+```
+
+With `players_per_group=8` and `bot_proportion=0.2` this yields 2 bots, and participants see a group size of 10.
+
+### Payoff and norm bonus
+
+Each round every individual receives 1 point; "invest" goes into the public pool, "keep" stays in the personal account. The pool is multiplied by `multiplier` and split evenly between humans and bots.
+
+```python
+self.group_cur_return = pool / (num_players + num_bots)
+p.payoff = self.group_cur_return - p.disc_choice
+```
+
+When `with_norm=True`, a participant who matches the majority receives an extra 1.5 points (`norm_payoff`). The majority test uses the hard-coded threshold 5 (`num_contr==5` / `>5` / `<5`), i.e. a 10-person group; change it together with the group size.
+
+### How concealment (deception) is implemented
+
+`truth_or_not` is the only switch. When True, the instructions state that the group may contain bots and show the bot/human icons, and `ContributeNew.html` picks `one.png` (0.1) or `two.png` (0.2) from `bot_proportion`. When False, `IntroductionA.html` takes the `{% else %}` branch and shows "您的小组成员全部都是人类", and the contribution page falls back to `zero.png`.
+
+`truthful/` and `deception/` differ only in these files:
+
+| File | Difference |
+| :-- | :-- |
+| `pgg_no_survey/templates/.../IntroductionA.html` | deception adds the `{% else %}` branch stating all group members are human |
+| `pgg_no_survey/templates/.../CheckQues.html` | deception rewrites Q4 to "您只可以与人类参与者互动" and changes the JS answer key `q4: ['3']` → `['2']` |
+| `pgg_no_survey/models.py` | deception hard-codes the first-stage payoff denominator as `pool / 10.0` instead of `pool / (num_players + num_bots)` |
+| `pgg_no_*/templates/.../ResultsNew.html` | deception forces the displayed cumulative payoff to `0.0` when `count == 1` |
+| `info_collector*/pages.py` + `SurveyMore.html` | deception comments out the `participant_identity` question and renumbers the remaining questions 1–8 |
+
+### Start oTree
+
+```bash
+conda activate /sdb/data_public/wanghan/ppg_human_bot/venv   # or your own pyenv/venv
+
+cd truthful/otree_pgg_bot_norm-main/otree_pgg_bot_norm-main   # must be the project root
+export OTREE_ADMIN_PASSWORD=otreeadmin123
+export OTREE_PRODUCTION=1
+otree resetdb
+otree prodserver 9800
+```
+
+Then open `localhost:9800` and configure the session with the parameters above. The four ordering projects cannot run simultaneously from one working directory; start them separately or on different ports.
+
+(`celery` and RabbitMQ/Redis are described in the Human-human game section above. The human-machine code does not import `MyPage`, so it does not depend on that oTree source patch.)
+
+### Check before running
+
+1. In `deception/`, `truth_or_not` is still `True` in all 8 `settings.py`. Running with the defaults therefore reproduces the **disclosed** condition, not the concealed one; set it to `False` in the session config (or in `settings.py`) to obtain concealment. How this was configured for the original data must be checked separately.
+2. In `deception/` `CheckQues.html`, Q4 still carries the `correct-answer` marker on the option whose value is `3`, while the JS key expects `['2']`; the two disagree, so participants may be unable to pass that question.
+3. `deception/` hard-codes the first-stage denominator at `10.0`; recompute if the group size or bot proportion changes.
+4. `deception/` `ResultsNew.html` displays `0.0` in the first round regardless of the real cumulative payoff.
+5. `norm_c` remains 1.5 even for stages with `with_norm=False`; only `with_norm=True` stages actually read it.
+6. The full flow has not been run end-to-end here; the statements above come from source and file comparison.
